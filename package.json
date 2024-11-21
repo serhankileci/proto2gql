@@ -1,0 +1,40 @@
+{
+	"name": "proto2gql",
+	"type": "module",
+	"version": "0.1.3",
+	"main": "./build/index.js",
+	"author": {
+		"name": "Serhan Kileci",
+		"email": "serhanselimkileci@gmail.com",
+		"url": "https://github.com/serhankileci"
+	},
+	"keywords": [
+		"graphql",
+		"protobuf",
+		"node",
+		"conversion"
+	],
+	"scripts": {
+		"test": "vitest --run --coverage",
+		"tooling:format": "prettier --check 'src/**/*.ts' || prettier --write 'src/**/*.ts'",
+		"tooling:lint": "eslint . --ext .ts",
+		"build": "tsc",
+		"dev": "nodemon --watch src --ext 'ts' --exec 'tsc && node build/index'",
+		"start": "node build/index"
+	},
+	"dependencies": {
+		"protobufjs": "^7.4.0"
+	},
+	"devDependencies": {
+		"@eslint/js": "^9.11.1",
+		"@types/express": "^5.0.0",
+		"@typescript-eslint/eslint-plugin": "^5.51.0",
+		"@typescript-eslint/parser": "^5.51.0",
+		"@vitest/coverage-istanbul": "^0.34.1",
+		"eslint": "^8.57.1",
+		"nodemon": "^3.0.1",
+		"prettier": "^2.8.4",
+		"typescript": "^4.9.5",
+		"vitest": "^0.34.1"
+	}
+}

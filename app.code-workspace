@@ -1,0 +1,17 @@
+{
+	"folders": [{ "path": "." }],
+	"settings": {
+		"files.exclude": {
+			"node_modules": true,
+			"package-lock.json": true,
+			"*.code-workspace": true,
+			"build": true
+		},
+		"search.exclude": {
+			"node_modules": true,
+			"package-lock.json": true,
+			"*.code-workspace": true,
+			"build": true
+		}
+	}
+}

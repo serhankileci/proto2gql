@@ -1,0 +1,23 @@
+{
+	"compilerOptions": {
+		"target": "ESNext",
+		"module": "ESNext",
+		"moduleResolution": "node",
+		"rootDir": "./src",
+		"outDir": "./build",
+		"resolveJsonModule": true,
+		"declaration": true,
+		"declarationMap": true,
+		"sourceMap": true,
+		"noEmitOnError": true,
+		"esModuleInterop": true,
+		"forceConsistentCasingInFileNames": true,
+		"strict": true,
+		"noImplicitAny": true,
+		"noUncheckedIndexedAccess": true,
+		"skipLibCheck": true,
+		"typeRoots": ["./node_modules/@types", "./node_modules/vitest"]
+	},
+	"include": ["src/**/*.ts", "src/types.ts", "src/index.ts"],
+	"exclude": ["./node_modules"]
+}
