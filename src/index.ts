@@ -43,6 +43,7 @@ const typeMapping: Record<string, string> = {
 	bool: "Boolean",
 	string: "String",
 	bytes: "String",
+	map: "JSON",
 };
 
 const googleTypeMapping: Record<string, Record<"typeName" | "value", string>> = {
@@ -54,6 +55,47 @@ const googleTypeMapping: Record<string, Record<"typeName" | "value", string>> = 
 		typeName: "DoubleValue",
 		value: "{\n\tvalue: Float\n}",
 	},
+	"google.protobuf.Int32Value": {
+		typeName: "Int32Value",
+		value: "{\n\tvalue: Int\n}",
+	},
+	"google.protobuf.Int64Value": {
+		typeName: "Int64Value",
+		value: "{\n\tvalue: Int\n}",
+	},
+	"google.protobuf.UInt32Value": {
+		typeName: "UInt32Value",
+		value: "{\n\tvalue: Int\n}",
+	},
+	"google.protobuf.UInt64Value": {
+		typeName: "UInt64Value",
+		value: "{\n\tvalue: Int\n}",
+	},
+	"google.protobuf.BoolValue": {
+		typeName: "BoolValue",
+		value: "{\n\tvalue: Boolean\n}",
+	},
+	"google.protobuf.BytesValue": {
+		typeName: "BytesValue",
+		value: "{\n\tvalue: String\n}",
+	},
+	"google.protobuf.FloatValue": {
+		typeName: "FloatValue",
+		value: "{\n\tvalue: Float\n}",
+	},
+	"google.protobuf.Empty": {
+		typeName: "Empty",
+		value: "{}",
+	},
+	"google.protobuf.Any": {
+		typeName: "Any",
+		value: "{\n\tvalue: JSON\n}",
+	},
+};
+
+const resourceVerbs = {
+	query: ["Get", "List"],
+	mutation: ["Create", "Update", "Delete"],
 };
 
 async function loadProtobufFiles(dirOrFile: string): Promise<string[]> {
@@ -85,9 +127,42 @@ async function loadProtobufFiles(dirOrFile: string): Promise<string[]> {
 	return result;
 }
 
+function protobufEnumToGraphQL(obj: protobuf.Enum): string {
+	const enumType =
+		`enum ${obj.name} {\n` +
+		Object.keys(obj.values)
+			.map(value => `\t${value}`)
+			.join("\n") +
+		"\n}";
+
+	return enumType;
+}
+
+function protobufServiceToGraphQL(service: protobuf.Service): string {
+	const queries: string[] = [];
+	const mutations: string[] = [];
+
+	Object.values(service.methods).forEach((method: protobuf.Method) => {
+		const gqlField = `  ${method.name}(${method.requestType}: ${method.requestType}): ${method.responseType}`;
+
+		if (resourceVerbs.query.some(verb => method.name.startsWith(verb))) {
+			queries.push(gqlField);
+		} else if (resourceVerbs.mutation.some(verb => method.name.startsWith(verb))) {
+			mutations.push(gqlField);
+		} else {
+			mutations.push(gqlField);
+		}
+	});
+
+	const queryType = queries.length ? `type Query {\n${queries.join("\n")}\n}` : "";
+	const mutationType = mutations.length ? `type Mutation {\n${mutations.join("\n")}\n}` : "";
+
+	return [queryType, mutationType].filter(Boolean).join("\n\n");
+}
+
 function protobufToGraphQL(root: protobuf.Root): string | null {
 	const types: string[] = [];
-	const nested = root.nested?.example;
+	const nested = root.nested;
 
 	if (!nested) {
 		return null;
@@ -103,21 +178,49 @@ function protobufToGraphQL(root: protobuf.Root): string | null {
 	const messages = Object.entries(nested).filter(([k, _]) => /^[A-Z]/.test(k));
 
 	messages.forEach(([_, obj]) => {
-		const fields = Object.values<FieldBase>(obj.fields).map(value => {
-			const googleField = googleTypeMapping[value.type];
-			let gqlType = typeMapping[value.type] || value.type;
+		if (obj instanceof protobuf.Enum) {
+			types.push(protobufEnumToGraphQL(obj));
+		} else if (obj instanceof protobuf.Service) {
+			types.push(protobufServiceToGraphQL(obj));
+		} else if (obj instanceof protobuf.Type) {
+			const fields = Object.values<FieldBase>(obj.fields).map(value => {
+				const googleField = googleTypeMapping[value.type];
+				let gqlType = typeMapping[value.type] || value.type;
 
-			if (googleField) {
-				types.unshift(`type ${googleField.typeName} ${googleField.value}`);
-				gqlType = googleField.typeName;
-			}
+				if (googleField) {
+					types.unshift(`type ${googleField.typeName} ${googleField.value}`);
+					gqlType = googleField.typeName;
+				}
 
-			const isArray = value.repeated ? "[" + gqlType + "]" : gqlType;
+				if (value.map) {
+					gqlType = "JSON";
+				}
 
-			return `\t${value.name}: ${isArray}`;
-		});
+				const isArray = value.repeated ? "[" + gqlType + "]" : gqlType;
 
-		types.push(`type ${obj.name} {\n${fields.join("\n")}\n}`);
+				if (value.name.startsWith(".")) {
+					value.name = value.name.slice(1);
+				}
+
+				return `\t${value.name}: ${isArray}`;
+			});
+
+			const oneofFields =
+				obj.oneofsArray?.map(oneof => {
+					const oneofFieldNames = oneof.fieldsArray.map(
+						(field: protobuf.Field) => obj.fields[field.name]!.name
+					);
+
+					return `\t# oneof: ${oneofFieldNames.join(", ")}\n\t${
+						oneof.name
+					}: ${oneofFieldNames
+						.map(f => typeMapping[obj.fields[f]!.type] || obj.fields[f]!.type)
+						.join(" | ")}`;
+				}) || [];
+
+			types.push(`type ${obj.name} {\n${[...fields, ...oneofFields].join("\n")}\n}`);
+			types.push(`input ${obj.name}Input {\n${[...fields, ...oneofFields].join("\n")}\n}`);
+		}
 	});
 
 	return types.join("\n\n") + "\n";
@@ -148,7 +251,7 @@ async function proto2gql(input: string, output: string): Promise<void> {
 
 	await fs.writeFile(output, schema, "utf-8");
 
-	console.log(
+	console.info(
 		`Converted ${protoFiles.length} protobuf${
 			protoFiles.length > 1 ? "s" : ""
 		} into a GraphQL schema at ${output}.`
