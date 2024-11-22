@@ -2,10 +2,13 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
-import protobuf, { type FieldBase } from "protobufjs";
+import protobuf, { FieldBase } from "protobufjs";
 
 /********** INIT **********/
-const [input, output, flag] = process.argv.slice(2);
+const [input, output, flag] =
+	process.env.NODE_ENV === "production"
+		? process.argv.slice(2)
+		: ["protos", "protos/schema.graphql", ""];
 const usage = "Usage: 'proto2gql path/to/protobuf-or-folder path/to/save/gql-schema'";
 const supportedVer = "Currently only proto3 is supported";
 const recursiveFlags = ["-r", "--recursive"];
@@ -177,51 +180,123 @@ function protobufToGraphQL(root: protobuf.Root): string | null {
 		process.exit(1);
 	}
 
-	const messages = Object.entries(nested).filter(([k, _]) => /^[A-Z]/.test(k));
-
-	messages.forEach(([_, obj]) => {
+	Object.values(nested).forEach(obj => {
 		if (obj instanceof protobuf.Enum) {
 			types.push(protobufEnumToGraphQL(obj));
 		} else if (obj instanceof protobuf.Service) {
 			types.push(protobufServiceToGraphQL(obj));
-		} else if (obj instanceof protobuf.Type) {
-			const fields = Object.values<FieldBase>(obj.fields).map(value => {
-				const googleField = googleTypeMapping[value.type];
-				let gqlType = typeMapping[value.type] || value.type;
+		} else if (obj instanceof protobuf.Namespace) {
+			const isPackage = obj.nestedArray.some(
+				nestedObj => nestedObj instanceof protobuf.Namespace
+			);
 
-				if (googleField) {
-					types.unshift(`type ${googleField.typeName} ${googleField.value}`);
-					gqlType = googleField.typeName;
+			if (isPackage) {
+				if (obj.name === "google") {
+					return;
 				}
 
-				if (value.map) {
-					gqlType = "JSON";
-				}
+				const packageTypes: string[] = [];
 
-				const isArray = value.repeated ? "[" + gqlType + "]" : gqlType;
+				obj.nestedArray.forEach(nestedObj => {
+					if (nestedObj instanceof protobuf.Type) {
+						const fields = Object.values<FieldBase>(nestedObj.fields).map(value => {
+							const googleField = googleTypeMapping[value.type];
+							let gqlType = typeMapping[value.type] || value.type;
 
-				if (value.name.startsWith(".")) {
-					value.name = value.name.slice(1);
-				}
+							if (googleField) {
+								packageTypes.unshift(
+									`type ${googleField.typeName} ${googleField.value}`
+								);
+								gqlType = googleField.typeName;
+							}
 
-				return `\t${value.name}: ${isArray}`;
-			});
+							if (value.map) {
+								gqlType = "JSON";
+							}
 
-			const oneofFields =
-				obj.oneofsArray?.map(oneof => {
-					const oneofFieldNames = oneof.fieldsArray.map(
-						(field: protobuf.Field) => obj.fields[field.name]!.name
-					);
+							const isArray = value.repeated ? "[" + gqlType + "]" : gqlType;
 
-					return `\t# oneof: ${oneofFieldNames.join(", ")}\n\t${
-						oneof.name
-					}: ${oneofFieldNames
-						.map(f => typeMapping[obj.fields[f]!.type] || obj.fields[f]!.type)
-						.join(" | ")}`;
-				}) || [];
+							if (value.name.startsWith(".")) {
+								value.name = value.name.slice(1);
+							}
 
-			types.push(`type ${obj.name} {\n${[...fields, ...oneofFields].join("\n")}\n}`);
-			types.push(`input ${obj.name}Input {\n${[...fields, ...oneofFields].join("\n")}\n}`);
+							return `\t${value.name}: ${isArray}`;
+						});
+
+						const oneofFields =
+							nestedObj.oneofsArray?.map(oneof => {
+								const oneofFieldNames = oneof.fieldsArray.map(
+									(field: protobuf.Field) => nestedObj.fields[field.name]!.name
+								);
+
+								return `\t# oneof: ${oneofFieldNames.join(", ")}\n\t${
+									oneof.name
+								}: ${oneofFieldNames
+									.map(
+										f =>
+											typeMapping[nestedObj.fields[f]!.type] ||
+											nestedObj.fields[f]!.type
+									)
+									.join(" | ")}`;
+							}) || [];
+
+						packageTypes.push(
+							`type ${nestedObj.name} {\n${[...fields, ...oneofFields].join("\n")}\n}`
+						);
+						packageTypes.push(
+							`input ${nestedObj.name}Input {\n${[...fields, ...oneofFields].join(
+								"\n"
+							)}\n}`
+						);
+					} else if (nestedObj instanceof protobuf.Enum) {
+						packageTypes.push(protobufEnumToGraphQL(nestedObj));
+					} else if (nestedObj instanceof protobuf.Service) {
+						packageTypes.push(protobufServiceToGraphQL(nestedObj));
+					}
+				});
+
+				types.push(`${packageTypes.join("\n\n")}\n`);
+			} else if (obj instanceof protobuf.Type) {
+				const fields = Object.values<FieldBase>(obj.fields).map(value => {
+					const googleField = googleTypeMapping[value.type];
+					let gqlType = typeMapping[value.type] || value.type;
+
+					if (googleField) {
+						types.unshift(`type ${googleField.typeName} ${googleField.value}`);
+						gqlType = googleField.typeName;
+					}
+
+					if (value.map) {
+						gqlType = "JSON";
+					}
+
+					const isArray = value.repeated ? "[" + gqlType + "]" : gqlType;
+
+					if (value.name.startsWith(".")) {
+						value.name = value.name.slice(1);
+					}
+
+					return `\t${value.name}: ${isArray}`;
+				});
+
+				const oneofFields =
+					obj.oneofsArray?.map(oneof => {
+						const oneofFieldNames = oneof.fieldsArray.map(
+							(field: protobuf.Field) => obj.fields[field.name]!.name
+						);
+
+						return `\t# oneof: ${oneofFieldNames.join(", ")}\n\t${
+							oneof.name
+						}: ${oneofFieldNames
+							.map(f => typeMapping[obj.fields[f]!.type] || obj.fields[f]!.type)
+							.join(" | ")}`;
+					}) || [];
+
+				types.push(`type ${obj.name} {\n${[...fields, ...oneofFields].join("\n")}\n}`);
+				types.push(
+					`input ${obj.name}Input {\n${[...fields, ...oneofFields].join("\n")}\n}`
+				);
+			}
 		}
 	});
 
@@ -243,10 +318,10 @@ async function proto2gql(input: string, output: string): Promise<void> {
 
 	await Promise.all(protoFiles.map(file => root.load(file, { keepCase: true })));
 
-	const schema = protobufToGraphQL(root);
+	const schema = protobufToGraphQL(root)?.trim();
 
 	if (!schema) {
-		console.error("Unexpected error.");
+		console.error("Failed operation (unknown parsing issue, did not write to schema file).");
 
 		process.exit(1);
 	}
