@@ -6,13 +6,24 @@ import protobuf, { FieldBase } from "protobufjs";
 
 /********** INIT **********/
 const [input, output, flag] =
-	process.env.NODE_ENV === "production"
-		? process.argv.slice(2)
-		: ["protos", "protos/schema.graphql", ""];
-const usage = "Usage: 'proto2gql path/to/protobuf-or-folder path/to/save/gql-schema'";
+	process.env.NODE_ENV === "production" ? process.argv.slice(2) : ["protos", "protos", ""];
+const usage = `
+To convert the protobuf file(s) into a GraphQL schema, use the following command:
+
+<input>: Path to a protobuf file or folder.
+<output>: Path to the destination folder for the schema.
+
+proto2gql <input> <output>
+
+For example:
+
+proto2gql ./protos ./schemas
+proto2gql ./protos/example.proto ./schemas
+`;
 const supportedVer = "Currently only proto3 is supported";
 const recursiveFlags = ["-r", "--recursive"];
 const helpFlags = ["-h", "--help", "help"];
+const outputFilename = "schema.graphql";
 
 if (input && helpFlags.includes(input)) {
 	console.info(`${usage}. ${supportedVer}.`);
@@ -326,11 +337,13 @@ async function proto2gql(input: string, output: string): Promise<void> {
 		process.exit(1);
 	}
 
-	await fs.writeFile(output, schema, "utf-8");
+	const outputPath = path.join(output, outputFilename);
+
+	await fs.writeFile(outputPath, schema, "utf-8");
 
 	console.info(
 		`Converted ${protoFiles.length} protobuf${
 			protoFiles.length > 1 ? "s" : ""
-		} into a GraphQL schema at ${output}.`
+		} into a GraphQL schema at ${outputPath}.`
 	);
 }
