@@ -19,7 +19,7 @@ To convert the protobuf file(s) into a GraphQL schema, use the following command
 
 `<input>`: Path to a protobuf file or folder.
 
-`<output>`: Path to the destination folder for the schema.
+`<output>`: Path to the destination folder for the schema. If output is not provided, the current working directory will be used.
 
 ```bash
 proto2gql <input> <output>
