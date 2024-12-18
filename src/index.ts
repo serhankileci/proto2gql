@@ -6,12 +6,12 @@ import protobuf, { FieldBase } from "protobufjs";
 
 /********** INIT **********/
 const [input, output, flag] =
-	process.env.NODE_ENV === "production" ? process.argv.slice(2) : ["protos", "protos", ""];
+	process.env.NODE_ENV === "production" ? process.argv.slice(2) : ["protos", "schemas", ""];
 const usage = `
-To convert the protobuf file(s) into a GraphQL schema, use the following command:
+To convert protobuf file(s) into GraphQL schemas, use the following command:
 
-<input>: Path to a protobuf file or folder.
-<output>: Path to the destination folder for the schema.
+<input>: Path to a protobuf file or a folder that has protobuf files.
+<output>: Path to the destination folder for the schema. If output is not provided, the current working directory will be used.
 
 proto2gql <input> <output>
 
@@ -23,14 +23,14 @@ proto2gql ./protos/example.proto ./schemas
 const supportedVer = "Currently only proto3 is supported";
 const recursiveFlags = ["-r", "--recursive"];
 const helpFlags = ["-h", "--help", "help"];
-const outputFilename = "schema.graphql";
+const graphqlExtension = ".graphql";
 
 if (input && helpFlags.includes(input)) {
 	console.info(`${usage}. ${supportedVer}.`);
 	process.exit(0);
 }
 
-if (!input || !output) {
+if (!input) {
 	console.error(`Invalid arguments. ${usage}.`);
 	process.exit(1);
 }
@@ -62,7 +62,7 @@ const typeMapping: Record<string, string> = {
 	map: "JSON",
 };
 
-const googleTypeMapping: Record<string, Record<"typeName" | "value", string>> = {
+const googleTypeMapping = {
 	"google.protobuf.StringValue": {
 		typeName: "StringValue",
 		value: "{\n\tvalue: String\n}",
@@ -107,7 +107,11 @@ const googleTypeMapping: Record<string, Record<"typeName" | "value", string>> = 
 		typeName: "Any",
 		value: "{\n\tvalue: JSON\n}",
 	},
-};
+	"google.protobuf.Timestamp": {
+		typeName: "Timestamp",
+		value: "{\n\tvalue: String\n}",
+	},
+} as const;
 
 const resourceVerbs = {
 	query: ["Get", "List"],
@@ -200,21 +204,23 @@ function protobufToGraphQL(root: protobuf.Root): string | null {
 			const isPackage = obj.nestedArray.some(
 				nestedObj => nestedObj instanceof protobuf.Namespace
 			);
+			type GoogleField = keyof typeof googleTypeMapping;
+			const addedGoogleTypes: Set<GoogleField> = new Set();
+			const packageTypes: string[] = [];
 
 			if (isPackage) {
 				if (obj.name === "google") {
 					return;
 				}
 
-				const packageTypes: string[] = [];
-
 				obj.nestedArray.forEach(nestedObj => {
 					if (nestedObj instanceof protobuf.Type) {
 						const fields = Object.values<FieldBase>(nestedObj.fields).map(value => {
-							const googleField = googleTypeMapping[value.type];
+							const googleField = googleTypeMapping[value.type as GoogleField];
 							let gqlType = typeMapping[value.type] || value.type;
 
-							if (googleField) {
+							if (googleField && !addedGoogleTypes.has(value.type as GoogleField)) {
+								addedGoogleTypes.add(value.type as GoogleField);
 								packageTypes.unshift(
 									`type ${googleField.typeName} ${googleField.value}`
 								);
@@ -240,7 +246,7 @@ function protobufToGraphQL(root: protobuf.Root): string | null {
 									(field: protobuf.Field) => nestedObj.fields[field.name]!.name
 								);
 
-								return `\t# oneof: ${oneofFieldNames.join(", ")}\n\t${
+								return `\toneof: ${oneofFieldNames.join(", ")}\n\t${
 									oneof.name
 								}: ${oneofFieldNames
 									.map(
@@ -269,11 +275,12 @@ function protobufToGraphQL(root: protobuf.Root): string | null {
 				types.push(`${packageTypes.join("\n\n")}\n`);
 			} else if (obj instanceof protobuf.Type) {
 				const fields = Object.values<FieldBase>(obj.fields).map(value => {
-					const googleField = googleTypeMapping[value.type];
+					const googleField = googleTypeMapping[value.type as GoogleField];
 					let gqlType = typeMapping[value.type] || value.type;
 
-					if (googleField) {
-						types.unshift(`type ${googleField.typeName} ${googleField.value}`);
+					if (googleField && !addedGoogleTypes.has(value.type as GoogleField)) {
+						addedGoogleTypes.add(value.type as GoogleField);
+						packageTypes.unshift(`type ${googleField.typeName} ${googleField.value}`);
 						gqlType = googleField.typeName;
 					}
 
@@ -296,7 +303,7 @@ function protobufToGraphQL(root: protobuf.Root): string | null {
 							(field: protobuf.Field) => obj.fields[field.name]!.name
 						);
 
-						return `\t# oneof: ${oneofFieldNames.join(", ")}\n\t${
+						return `\toneof: ${oneofFieldNames.join(", ")}\n\t${
 							oneof.name
 						}: ${oneofFieldNames
 							.map(f => typeMapping[obj.fields[f]!.type] || obj.fields[f]!.type)
@@ -314,8 +321,9 @@ function protobufToGraphQL(root: protobuf.Root): string | null {
 	return types.join("\n\n") + "\n";
 }
 
-async function proto2gql(input: string, output: string): Promise<void> {
+async function proto2gql(input: string, output?: string): Promise<void> {
 	const protoFiles = await loadProtobufFiles(input);
+	const outputDir = output || "./";
 
 	if (protoFiles.length === 0) {
 		console.error(
@@ -325,25 +333,34 @@ async function proto2gql(input: string, output: string): Promise<void> {
 		process.exit(1);
 	}
 
-	const root = new protobuf.Root();
+	await Promise.all(
+		protoFiles.map(async file => {
+			const root = new protobuf.Root();
 
-	await Promise.all(protoFiles.map(file => root.load(file, { keepCase: true })));
+			await root.load(file, { keepCase: true });
 
-	const schema = protobufToGraphQL(root)?.trim();
+			const schema = protobufToGraphQL(root)?.trim();
 
-	if (!schema) {
-		console.error("Failed operation (unknown parsing issue, did not write to schema file).");
+			if (!schema) {
+				console.error(`Failed to convert ${file} to GraphQL schema.`);
+				return;
+			}
 
-		process.exit(1);
-	}
+			const fileName = path.basename(file, ".proto") + graphqlExtension;
+			const outputPath = path.join(outputDir, fileName);
 
-	const outputPath = path.join(output, outputFilename);
+			await fs.stat(outputDir).catch(async () => {
+				console.info(`There was no '${outputDir}' output directory, creating one.`);
+				await fs.mkdir(outputDir);
+			});
 
-	await fs.writeFile(outputPath, schema, "utf-8");
+			await fs.writeFile(outputPath, schema, "utf-8");
+		})
+	);
 
 	console.info(
-		`Converted ${protoFiles.length} protobuf${
+		`Converted ${protoFiles.length} protobuf file${
 			protoFiles.length > 1 ? "s" : ""
-		} into a GraphQL schema at ${outputPath}.`
+		} into GraphQL schema${protoFiles.length > 1 ? "s" : ""}.`
 	);
 }
